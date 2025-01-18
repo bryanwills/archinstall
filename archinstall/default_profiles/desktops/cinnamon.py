@@ -1,27 +1,31 @@
-from typing import Optional, List, Any, TYPE_CHECKING
+from typing import override
 
-from archinstall.default_profiles.profile import ProfileType, GreeterType
+from archinstall.default_profiles.profile import GreeterType, ProfileType
 from archinstall.default_profiles.xorg import XorgProfile
-
-if TYPE_CHECKING:
-	_: Any
 
 
 class CinnamonProfile(XorgProfile):
-	def __init__(self):
+	def __init__(self) -> None:
 		super().__init__('Cinnamon', ProfileType.DesktopEnv, description='')
 
 	@property
-	def packages(self) -> List[str]:
+	@override
+	def packages(self) -> list[str]:
 		return [
 			"cinnamon",
 			"system-config-printer",
 			"gnome-keyring",
 			"gnome-terminal",
-			"blueberry",
-			"metacity"
+			"blueman",
+			"bluez-utils",
+			"engrampa",
+			"gnome-screenshot",
+			"gvfs-smb",
+			"xed",
+			"xdg-user-dirs-gtk"
 		]
 
 	@property
-	def default_greeter_type(self) -> Optional[GreeterType]:
+	@override
+	def default_greeter_type(self) -> GreeterType | None:
 		return GreeterType.Lightdm

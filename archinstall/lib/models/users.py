@@ -1,9 +1,13 @@
 from dataclasses import dataclass
-from typing import Dict, List, Union, Any, TYPE_CHECKING
 from enum import Enum
+from typing import TYPE_CHECKING, Any, override
 
 if TYPE_CHECKING:
-	_: Any
+	from collections.abc import Callable
+
+	from archinstall.lib.translationhandler import DeferredTranslation
+
+	_: Callable[[str], DeferredTranslation]
 
 
 class PasswordStrength(Enum):
@@ -13,19 +17,28 @@ class PasswordStrength(Enum):
 	STRONG = 'strong'
 
 	@property
-	def value(self):
+	@override
+	def value(self) -> str:  # pylint: disable=invalid-overridden-method
 		match self:
-			case PasswordStrength.VERY_WEAK: return str(_('very weak'))
-			case PasswordStrength.WEAK: return str(_('weak'))
-			case PasswordStrength.MODERATE: return str(_('moderate'))
-			case PasswordStrength.STRONG: return str(_('strong'))
+			case PasswordStrength.VERY_WEAK:
+				return str(_('very weak'))
+			case PasswordStrength.WEAK:
+				return str(_('weak'))
+			case PasswordStrength.MODERATE:
+				return str(_('moderate'))
+			case PasswordStrength.STRONG:
+				return str(_('strong'))
 
-	def color(self):
+	def color(self) -> str:
 		match self:
-			case PasswordStrength.VERY_WEAK: return 'red'
-			case PasswordStrength.WEAK: return 'red'
-			case PasswordStrength.MODERATE: return 'yellow'
-			case PasswordStrength.STRONG: return 'green'
+			case PasswordStrength.VERY_WEAK:
+				return 'red'
+			case PasswordStrength.WEAK:
+				return 'red'
+			case PasswordStrength.MODERATE:
+				return 'yellow'
+			case PasswordStrength.STRONG:
+				return 'green'
 
 	@classmethod
 	def strength(cls, password: str) -> 'PasswordStrength':
@@ -97,12 +110,12 @@ class User:
 	sudo: bool
 
 	@property
-	def groups(self) -> List[str]:
+	def groups(self) -> list[str]:
 		# this property should be transferred into a class attr instead
 		# if it's every going to be used
 		return []
 
-	def json(self) -> Dict[str, Any]:
+	def json(self) -> dict[str, Any]:
 		return {
 			'username': self.username,
 			'!password': self.password,
@@ -110,7 +123,7 @@ class User:
 		}
 
 	@classmethod
-	def _parse(cls, config_users: List[Dict[str, Any]]) -> List['User']:
+	def _parse(cls, config_users: list[dict[str, Any]]) -> list['User']:
 		users = []
 
 		for entry in config_users:
@@ -127,7 +140,7 @@ class User:
 		return users
 
 	@classmethod
-	def _parse_backwards_compatible(cls, config_users: Dict, sudo: bool) -> List['User']:
+	def _parse_backwards_compatible(cls, config_users: dict[str, dict[str, str]], sudo: bool) -> list['User']:
 		if len(config_users.keys()) > 0:
 			username = list(config_users.keys())[0]
 			password = config_users[username]['!password']
@@ -140,9 +153,9 @@ class User:
 	@classmethod
 	def parse_arguments(
 		cls,
-		config_users: Union[List[Dict[str, str]], Dict[str, str]],
-		config_superusers: Union[List[Dict[str, str]], Dict[str, str]]
-	) -> List['User']:
+		config_users: list[dict[str, str]] | dict[str, dict[str, str]],
+		config_superusers: list[dict[str, str]] | dict[str, dict[str, str]]
+	) -> list['User']:
 		users = []
 
 		# backwards compatibility

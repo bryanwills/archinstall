@@ -1,9 +1,9 @@
 import importlib
 import sys
-import pathlib
+from pathlib import Path
 
 # Load .git version before the builtin version
-if pathlib.Path('./archinstall/__init__.py').absolute().exists():
+if Path('./archinstall/__init__.py').absolute().exists():
 	spec = importlib.util.spec_from_file_location("archinstall", "./archinstall/__init__.py")
 
 	if spec is None or spec.loader is None:

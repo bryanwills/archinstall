@@ -1,19 +1,19 @@
-from typing import List, Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, override
 
 from archinstall.default_profiles.profile import ProfileType
 from archinstall.default_profiles.xorg import XorgProfile
 
 if TYPE_CHECKING:
 	from archinstall.lib.installer import Installer
-	_: Any
 
 
 class AwesomeProfile(XorgProfile):
-	def __init__(self):
+	def __init__(self) -> None:
 		super().__init__('Awesome', ProfileType.WindowMgr, description='')
 
 	@property
-	def packages(self) -> List[str]:
+	@override
+	def packages(self) -> list[str]:
 		return super().packages + [
 			'awesome',
 			'alacritty',
@@ -28,11 +28,12 @@ class AwesomeProfile(XorgProfile):
 			'xsel',
 		]
 
-	def install(self, install_session: 'Installer'):
+	@override
+	def install(self, install_session: 'Installer') -> None:
 		super().install(install_session)
 
 		# TODO: Copy a full configuration to ~/.config/awesome/rc.lua instead.
-		with open(f"{install_session.target}/etc/xdg/awesome/rc.lua", 'r') as fh:
+		with open(f"{install_session.target}/etc/xdg/awesome/rc.lua") as fh:
 			awesome_lua = fh.read()
 
 		# Replace xterm with alacritty for a smoother experience.
@@ -45,7 +46,7 @@ class AwesomeProfile(XorgProfile):
 
 		# TODO: check if we selected a greeter,
 		# but for now, awesome is intended to run without one.
-		with open(f"{install_session.target}/etc/X11/xinit/xinitrc", 'r') as xinitrc:
+		with open(f"{install_session.target}/etc/X11/xinit/xinitrc") as xinitrc:
 			xinitrc_data = xinitrc.read()
 
 		for line in xinitrc_data.split('\n'):

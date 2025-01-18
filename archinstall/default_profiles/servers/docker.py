@@ -1,7 +1,6 @@
-from typing import List, Union, TYPE_CHECKING
+from typing import TYPE_CHECKING, override
 
 import archinstall
-
 from archinstall.default_profiles.profile import Profile, ProfileType
 from archinstall.lib.models import User
 
@@ -10,22 +9,25 @@ if TYPE_CHECKING:
 
 
 class DockerProfile(Profile):
-	def __init__(self):
+	def __init__(self) -> None:
 		super().__init__(
 			'Docker',
 			ProfileType.ServerType
 		)
 
 	@property
-	def packages(self) -> List[str]:
+	@override
+	def packages(self) -> list[str]:
 		return ['docker']
 
 	@property
-	def services(self) -> List[str]:
+	@override
+	def services(self) -> list[str]:
 		return ['docker']
 
-	def post_install(self, install_session: 'Installer'):
-		users: Union[User, List[User]] = archinstall.arguments.get('!users', [])
+	@override
+	def post_install(self, install_session: 'Installer') -> None:
+		users: User | list[User] = archinstall.arguments.get('!users', [])
 		if not isinstance(users, list):
 			users = [users]
 

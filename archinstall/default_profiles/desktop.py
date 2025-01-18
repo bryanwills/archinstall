@@ -1,27 +1,32 @@
-from typing import Any, TYPE_CHECKING, List, Optional, Dict
+from typing import TYPE_CHECKING, override
 
-from archinstall.lib import menu
+from archinstall.default_profiles.profile import GreeterType, Profile, ProfileType, SelectResult
 from archinstall.lib.output import info
 from archinstall.lib.profile.profiles_handler import profile_handler
-from archinstall.default_profiles.profile import Profile, ProfileType, SelectResult, GreeterType
+from archinstall.tui import FrameProperties, MenuItem, MenuItemGroup, PreviewStyle, ResultType, SelectMenu
 
 if TYPE_CHECKING:
+	from collections.abc import Callable
+
 	from archinstall.lib.installer import Installer
-	_: Any
+	from archinstall.lib.translationhandler import DeferredTranslation
+
+	_: Callable[[str], DeferredTranslation]
 
 
 class DesktopProfile(Profile):
-	def __init__(self, current_selection: List[Profile] = []):
+	def __init__(self, current_selection: list[Profile] = []) -> None:
 		super().__init__(
 			'Desktop',
 			ProfileType.Desktop,
-			description=str(_('Provides a selection of desktop environments and tiling window managers, e.g. gnome, kde, sway')),
+			description=str(_('Provides a selection of desktop environments and tiling window managers, e.g. GNOME, KDE Plasma, Sway')),
 			current_selection=current_selection,
 			support_greeter=True
 		)
 
 	@property
-	def packages(self) -> List[str]:
+	@override
+	def packages(self) -> list[str]:
 		return [
 			'nano',
 			'vim',
@@ -36,8 +41,9 @@ class DesktopProfile(Profile):
 		]
 
 	@property
-	def default_greeter_type(self) -> Optional[GreeterType]:
-		combined_greeters: Dict[GreeterType, int] = {}
+	@override
+	def default_greeter_type(self) -> GreeterType | None:
+		combined_greeters: dict[GreeterType, int] = {}
 		for profile in self.current_selection:
 			if profile.default_greeter_type:
 				combined_greeters.setdefault(profile.default_greeter_type, 0)
@@ -48,37 +54,54 @@ class DesktopProfile(Profile):
 
 		return None
 
-	def _do_on_select_profiles(self):
+	def _do_on_select_profiles(self) -> None:
 		for profile in self.current_selection:
 			profile.do_on_select()
 
-	def do_on_select(self) -> SelectResult:
-		choice = profile_handler.select_profile(
-			profile_handler.get_desktop_profiles(),
-			self._current_selection,
-			title=str(_('Select your desired desktop environment')),
-			multi=True
-		)
+	@override
+	def do_on_select(self) -> SelectResult | None:
+		items = [
+			MenuItem(
+				p.name,
+				value=p,
+				preview_action=lambda x: x.value.preview_text()
+			) for p in profile_handler.get_desktop_profiles()
+		]
 
-		match choice.type_:
-			case menu.MenuSelectionType.Selection:
-				self.set_current_selection(choice.value)  # type: ignore
+		group = MenuItemGroup(items, sort_items=True)
+		group.set_selected_by_value(self.current_selection)
+
+		result = SelectMenu(
+			group,
+			multi=True,
+			allow_reset=True,
+			allow_skip=True,
+			preview_style=PreviewStyle.RIGHT,
+			preview_size='auto',
+			preview_frame=FrameProperties.max('Info')
+		).run()
+
+		match result.type_:
+			case ResultType.Selection:
+				self.current_selection = result.get_values()
 				self._do_on_select_profiles()
 				return SelectResult.NewSelection
-			case menu.MenuSelectionType.Skip:
+			case ResultType.Skip:
 				return SelectResult.SameSelection
-			case menu.MenuSelectionType.Reset:
+			case ResultType.Reset:
 				return SelectResult.ResetCurrent
 
-	def post_install(self, install_session: 'Installer'):
-		for profile in self._current_selection:
+	@override
+	def post_install(self, install_session: 'Installer') -> None:
+		for profile in self.current_selection:
 			profile.post_install(install_session)
 
-	def install(self, install_session: 'Installer'):
+	@override
+	def install(self, install_session: 'Installer') -> None:
 		# Install common packages for all desktop environments
 		install_session.add_additional_packages(self.packages)
 
-		for profile in self._current_selection:
+		for profile in self.current_selection:
 			info(f'Installing profile {profile.name}...')
 
 			install_session.add_additional_packages(profile.packages)

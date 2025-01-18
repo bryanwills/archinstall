@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import sys
 from enum import Enum, auto
-from typing import List, Optional, Any, Dict, TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 
-from archinstall.lib.utils.util import format_cols
+from ..lib.storage import storage
 
 if TYPE_CHECKING:
-	from archinstall.lib.installer import Installer
-	_: Any
+	from collections.abc import Callable
 
+	from archinstall.lib.translationhandler import DeferredTranslation
 
-TProfile = TypeVar('TProfile', bound='Profile')
+	from ..lib.installer import Installer
+
+	_: Callable[[str], DeferredTranslation]
 
 
 class ProfileType(Enum):
@@ -37,6 +40,10 @@ class GreeterType(Enum):
 	Gdm = 'gdm'
 	Ly = 'ly'
 
+	# .. todo:: Remove when we un-hide cosmic behind --advanced
+	if '--advanced' in sys.argv:
+		CosmicSession = "cosmic-greeter"
+
 
 class SelectResult(Enum):
 	NewSelection = auto()
@@ -50,23 +57,25 @@ class Profile:
 		name: str,
 		profile_type: ProfileType,
 		description: str = '',
-		current_selection: List[TProfile] = [],
-		packages: List[str] = [],
-		services: List[str] = [],
+		current_selection: list[Profile] = [],
+		packages: list[str] = [],
+		services: list[str] = [],
 		support_gfx_driver: bool = False,
-		support_greeter: bool = False
-	):
+		support_greeter: bool = False,
+		advanced: bool = False
+	) -> None:
 		self.name = name
 		self.description = description
 		self.profile_type = profile_type
-		self.custom_settings: Dict[str, Any] = {}
+		self.custom_settings: dict[str, str | None] = {}
+		self.advanced = advanced
 
 		self._support_gfx_driver = support_gfx_driver
 		self._support_greeter = support_greeter
 
-		# self.gfx_driver: Optional[str] = None
+		# self.gfx_driver: str | None = None
 
-		self._current_selection = current_selection
+		self.current_selection = current_selection
 		self._packages = packages
 		self._services = services
 
@@ -74,11 +83,7 @@ class Profile:
 		self.custom_enabled = False
 
 	@property
-	def current_selection(self) -> List[TProfile]:
-		return self._current_selection
-
-	@property
-	def packages(self) -> List[str]:
+	def packages(self) -> list[str]:
 		"""
 		Returns a list of packages that should be installed when
 		this profile is among the chosen ones
@@ -86,7 +91,7 @@ class Profile:
 		return self._packages
 
 	@property
-	def services(self) -> List[str]:
+	def services(self) -> list[str]:
 		"""
 		Returns a list of services that should be enabled when
 		this profile is among the chosen ones
@@ -94,37 +99,44 @@ class Profile:
 		return self._services
 
 	@property
-	def default_greeter_type(self) -> Optional[GreeterType]:
+	def default_greeter_type(self) -> GreeterType | None:
 		"""
 		Setting a default greeter type for a desktop profile
 		"""
 		return None
 
-	def install(self, install_session: 'Installer'):
+	def _advanced_check(self) -> bool:
+		"""
+		Used to control if the Profile() should be visible or not in different contexts.
+		Returns True if --advanced is given on a Profile(advanced=True) instance.
+		"""
+		return self.advanced is False or storage['arguments'].get('advanced', False) is True
+
+	def install(self, install_session: 'Installer') -> None:
 		"""
 		Performs installation steps when this profile was selected
 		"""
 
-	def post_install(self, install_session: 'Installer'):
+	def post_install(self, install_session: 'Installer') -> None:
 		"""
 		Hook that will be called when the installation process is
 		finished and custom installation steps for specific default_profiles
 		are needed
 		"""
 
-	def json(self) -> Dict:
+	def json(self) -> dict[str, str]:
 		"""
 		Returns a json representation of the profile
 		"""
 		return {}
 
-	def do_on_select(self) -> SelectResult:
+	def do_on_select(self) -> SelectResult | None:
 		"""
 		Hook that will be called when a profile is selected
 		"""
 		return SelectResult.NewSelection
 
-	def set_custom_settings(self, settings: Dict[str, Any]):
+	def set_custom_settings(self, settings: dict[str, str | None]) -> None:
 		"""
 		Set the custom settings for the profile.
 		This is also called when the settings are parsed from the config
@@ -132,32 +144,29 @@ class Profile:
 		"""
 		self.custom_settings = settings
 
-	def current_selection_names(self) -> List[str]:
-		if self._current_selection:
-			return [s.name for s in self._current_selection]
+	def current_selection_names(self) -> list[str]:
+		if self.current_selection:
+			return [s.name for s in self.current_selection]
 		return []
 
-	def reset(self):
-		self.set_current_selection([])
-
-	def set_current_selection(self, current_selection: List[TProfile]):
-		self._current_selection = current_selection
+	def reset(self) -> None:
+		self.current_selection = []
 
 	def is_top_level_profile(self) -> bool:
 		top_levels = [ProfileType.Desktop, ProfileType.Server, ProfileType.Xorg, ProfileType.Minimal, ProfileType.Custom]
 		return self.profile_type in top_levels
 
 	def is_desktop_profile(self) -> bool:
-		return self.profile_type == ProfileType.Desktop
+		return self.profile_type == ProfileType.Desktop if self._advanced_check() else False
 
 	def is_server_type_profile(self) -> bool:
 		return self.profile_type == ProfileType.ServerType
 
 	def is_desktop_type_profile(self) -> bool:
-		return self.profile_type == ProfileType.DesktopEnv or self.profile_type == ProfileType.WindowMgr
+		return (self.profile_type == ProfileType.DesktopEnv or self.profile_type == ProfileType.WindowMgr) if self._advanced_check() else False
 
 	def is_xorg_type_profile(self) -> bool:
-		return self.profile_type == ProfileType.Xorg
+		return self.profile_type == ProfileType.Xorg if self._advanced_check() else False
 
 	def is_tailored(self) -> bool:
 		return self.profile_type == ProfileType.Tailored
@@ -166,27 +175,36 @@ class Profile:
 		return self.profile_type == ProfileType.CustomType
 
 	def is_graphic_driver_supported(self) -> bool:
-		if not self._current_selection:
+		if not self.current_selection:
 			return self._support_gfx_driver
 		else:
-			if any([p._support_gfx_driver for p in self._current_selection]):
+			if any([p._support_gfx_driver for p in self.current_selection]):
 				return True
 			return False
 
 	def is_greeter_supported(self) -> bool:
 		return self._support_greeter
 
-	def preview_text(self) -> Optional[str]:
+	def preview_text(self) -> str:
 		"""
-		Used for preview text in profiles_bck. If a description is set for a
-		profile it will automatically display that one in the preview.
-		If no preview or a different text should be displayed just
+		Override this method to provide a preview text for the profile
 		"""
-		if self.description:
-			return self.description
-		return None
+		return self.packages_text()
 
-	def packages_text(self) -> str:
-		header = str(_('Installed packages'))
-		output = format_cols(self.packages, header)
-		return output
+	def packages_text(self, include_sub_packages: bool = False) -> str:
+		packages = set()
+
+		if self.packages:
+			packages = set(self.packages)
+
+		if include_sub_packages:
+			for sub_profile in self.current_selection:
+				if sub_profile.packages:
+					packages.update(sub_profile.packages)
+
+		text = str(_('Installed packages')) + ':\n'
+
+		for pkg in sorted(packages):
+			text += f'\t- {pkg}\n'
+
+		return text

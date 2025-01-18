@@ -18,20 +18,20 @@ jobs:
   docs:
     runs-on: ubuntu-latest
     container:
-      image: archlinux:latest
+      image: archlinux/archlinux:latest
       options: --privileged
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
       - name: Install pre-dependencies
         run: |
-          pacman -Sy --noconfirm tree git python-pyparted python-simple-term-menu python-setuptools python-sphinx python-sphinx_rtd_theme python-build python-installer python-wheel
+          pacman -Sy --noconfirm tree git python-pyparted python-setuptools python-sphinx python-sphinx_rtd_theme python-build python-installer python-wheel
       - name: Sphinx build
         run: |
           sphinx-build docs _build
       - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
-      #  if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: peaceiris/actions-gh-pages@v4
+        if: ${{ github.event_name != 'pull_request' }}
         with:
           publish_branch: gh-pages
           github_token: ${{ secrets.GITHUB_TOKEN }}

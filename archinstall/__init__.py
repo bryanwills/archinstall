@@ -1,4 +1,5 @@
 """Arch Linux installer - guided, templates etc."""
+import curses
 import importlib
 import os
 import sys
@@ -6,43 +7,41 @@ import time
 import traceback
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Union
+from typing import TYPE_CHECKING, Any
 
-from .lib import disk
-from .lib import menu
-from .lib import models
-from .lib import packages
-from .lib import exceptions
-from .lib import luks
-from .lib import locale
-from .lib import mirrors
-from .lib import networking
-from .lib import profile
-from .lib import interactions
 from . import default_profiles
-
-from .lib.hardware import SysInfo, GfxDriver
-from .lib.installer import Installer, accessibility_tools_in_use
-from .lib.output import FormattedOutput, log, error, debug, warn, info
-from .lib.pacman import Pacman
-from .lib.storage import storage
-from .lib.global_menu import GlobalMenu
+from .lib import disk, exceptions, interactions, locale, luks, mirrors, models, networking, packages, profile
 from .lib.boot import Boot
-from .lib.translationhandler import TranslationHandler, Language, DeferredTranslation
-from .lib.plugins import plugins, load_plugin
 from .lib.configuration import ConfigurationOutput
-
 from .lib.general import (
-	generate_password, locate_binary, clear_vt100_escape_codes,
-	JSON, UNSAFE_JSON, SysCommandWorker, SysCommand,
-	run_custom_user_commands, json_stream_to_structure, secret
+	JSON,
+	UNSAFE_JSON,
+	SysCommand,
+	SysCommandWorker,
+	clear_vt100_escape_codes,
+	generate_password,
+	json_stream_to_structure,
+	locate_binary,
+	run_custom_user_commands,
+	secret,
 )
+from .lib.global_menu import GlobalMenu
+from .lib.hardware import GfxDriver, SysInfo
+from .lib.installer import Installer, accessibility_tools_in_use
+from .lib.output import FormattedOutput, debug, error, info, log, warn
+from .lib.pacman import Pacman
+from .lib.plugins import load_plugin, plugins
+from .lib.storage import storage
+from .lib.translationhandler import DeferredTranslation, Language, translation_handler
+from .tui import Tui
 
 if TYPE_CHECKING:
-	_: Any
+	from collections.abc import Callable
+
+	_: Callable[[str], DeferredTranslation]
 
 
-__version__ = "2.7.1"
+__version__ = "3.0.1"
 storage['__version__'] = __version__
 
 # add the custom _ as a builtin, it can now be used anywhere in the
@@ -57,16 +56,12 @@ debug(f"Virtualization detected: {SysInfo.virtualization()}; is VM: {SysInfo.is_
 debug(f"Graphics devices detected: {SysInfo._graphics_devices().keys()}")
 
 # For support reasons, we'll log the disk layout pre installation to match against post-installation layout
-debug(f"Disk states before installing: {disk.disk_layouts()}")
-
-if 'sphinx' not in sys.modules and os.getuid() != 0:
-	print(_("Archinstall requires root privileges to run. See --help for more."))
-	exit(1)
+debug(f"Disk states before installing:\n{disk.disk_layouts()}")
 
 parser = ArgumentParser()
 
 
-def define_arguments():
+def define_arguments() -> None:
 	"""
 	Define which explicit arguments do we allow.
 	Refer to https://docs.python.org/3/library/argparse.html for documentation and
@@ -82,9 +77,9 @@ def define_arguments():
 	parser.add_argument("--dry-run", "--dry_run", action="store_true",
 						help="Generates a configuration file and then exits instead of performing an installation")
 	parser.add_argument("--script", default="guided", nargs="?", help="Script to run for installation", type=str)
-	parser.add_argument("--mount-point", "--mount_point", nargs="?", type=str,
+	parser.add_argument("--mount-point", "--mount_point", default=Path("/mnt/archinstall"), nargs="?", type=Path,
 						help="Define an alternate mount point for installation")
-	parser.add_argument("--skip-ntp", action="store_true", help="Disables NTP checks during instalation", default=False)
+	parser.add_argument("--skip-ntp", action="store_true", help="Disables NTP checks during installation", default=False)
 	parser.add_argument("--debug", action="store_true", default=False, help="Adds debug info into the log")
 	parser.add_argument("--offline", action="store_true", default=False,
 						help="Disabled online upstream services such as package search and key-ring auto update.")
@@ -95,7 +90,17 @@ def define_arguments():
 						help="Skip the version check when running archinstall")
 
 
-def parse_unspecified_argument_list(unknowns: list, multiple: bool = False, err: bool = False) -> dict:
+if 'sphinx' not in sys.modules:
+	if '--help' in sys.argv or '-h' in sys.argv:
+		define_arguments()
+		parser.print_help()
+		exit(0)
+	if os.getuid() != 0:
+		print(_("Archinstall requires root privileges to run. See --help for more."))
+		exit(1)
+
+
+def parse_unspecified_argument_list(unknowns: list, multiple: bool = False, err: bool = False) -> dict:  # type: ignore[type-arg]
 	"""We accept arguments not defined to the parser. (arguments "ad hoc").
 	Internally argparse return to us a list of words so we have to parse its contents, manually.
 	We accept following individual syntax for each argument
@@ -105,18 +110,20 @@ def parse_unspecified_argument_list(unknowns: list, multiple: bool = False, err:
 		--argument   (boolean as default)
 	the optional parameters to the function alter a bit its behaviour:
 	* multiple allows multivalued arguments, each value separated by whitespace. They're returned as a list
-	* error. If set any non correctly specified argument-value pair to raise an exception. Else, simply notifies the existence of a problem and continues processing.
+	* error. If set any non correctly specified argument-value pair to raise an exception. Else, simply notifies the
+	existence of a problem and continues processing.
 
-	To a certain extent, multiple and error are incompatible. In fact, the only error this routine can catch, as of now, is the event
-	argument value value ...
+	To a certain extent, multiple and error are incompatible. In fact, the only error this routine can catch, as of now,
+	is the event argument value value ...
 	which isn't am error if multiple is specified
 	"""
-	tmp_list = unknowns[:]  # wastes a few bytes, but avoids any collateral effect of the destructive nature of the pop method()
+	tmp_list = [arg for arg in unknowns if arg != "="]  # wastes a few bytes, but avoids any collateral effect of the destructive nature of the pop method()
 	config = {}
 	key = None
 	last_key = None
 	while tmp_list:
 		element = tmp_list.pop(0)  # retrieve an element of the list
+
 		if element.startswith('--'):  # is an argument ?
 			if '=' in element:  # uses the arg=value syntax ?
 				key, value = [x.strip() for x in element[2:].split('=', 1)]
@@ -126,27 +133,23 @@ def parse_unspecified_argument_list(unknowns: list, multiple: bool = False, err:
 			else:
 				key = element[2:]
 				config[key] = True  # every argument starts its lifecycle as boolean
-		else:
-			if element == '=':
-				continue
-			if key:
-				config[key] = element
-				last_key = key  # multiple
-				key = None
+		elif key:
+			config[key] = element
+			last_key = key  # multiple
+			key = None
+		elif multiple and last_key:
+			if isinstance(config[last_key], str):
+				config[last_key] = [config[last_key], element]
 			else:
-				if multiple and last_key:
-					if isinstance(config[last_key], str):
-						config[last_key] = [config[last_key], element]
-					else:
-						config[last_key].append(element)
-				elif err:
-					raise ValueError(f"Entry {element} is not related to any argument")
-				else:
-					print(f" We ignore the entry {element} as it isn't related to any argument")
+				config[last_key].append(element)
+		elif err:
+			raise ValueError(f"Entry {element} is not related to any argument")
+		else:
+			print(f" We ignore the entry {element} as it isn't related to any argument")
 	return config
 
 
-def cleanup_empty_args(args: Union[Namespace, Dict]) -> Dict:
+def cleanup_empty_args(args: Namespace | dict) -> dict:  # type: ignore[type-arg]
 	"""
 	Takes arguments (dictionary or argparse Namespace) and removes any
 	None values. This ensures clean mergers during dict.update(args)
@@ -165,21 +168,24 @@ def cleanup_empty_args(args: Union[Namespace, Dict]) -> Dict:
 	return clean_args
 
 
-def get_arguments() -> Dict[str, Any]:
+def get_arguments() -> dict[str, Any]:
 	""" The handling of parameters from the command line
 	Is done on following steps:
 	0) we create a dict to store the arguments and their values
 	1) preprocess.
-		We take those arguments which use JSON files, and read them into the argument dict. So each first level entry becomes a argument on it's own right
+		We take those arguments which use JSON files, and read them into the argument dict. So each first level entry
+		becomes a argument on it's own right
 	2) Load.
-		We convert the predefined argument list directly into the dict via the vars() function. Non specified arguments are loaded with value None or false if they are booleans (action="store_true").
-		The name is chosen according to argparse conventions. See above (the first text is used as argument name, but underscore substitutes dash)
-		We then load all the undefined arguments. In this case the names are taken as written.
+		We convert the predefined argument list directly into the dict via the vars() function. Non specified arguments
+		are loaded with value None or false if they are booleans (action="store_true"). The name is chosen according to
+		argparse conventions. See above (the first text is used as argument name, but underscore substitutes dash). We
+		then load all the undefined arguments. In this case the names are taken as written.
 		Important. This way explicit command line arguments take precedence over configuration files.
 	3) Amend
-		Change whatever is needed on the configuration dictionary (it could be done in post_process_arguments but  this ougth to be left to changes anywhere else in the code, not in the arguments dictionary
+		Change whatever is needed on the configuration dictionary (it could be done in post_process_arguments but  this
+		ougth to be left to changes anywhere else in the code, not in the arguments dictionary
 	"""
-	config: Dict[str, Any] = {}
+	config: dict[str, Any] = {}
 	args, unknowns = parser.parse_known_args()
 	# preprocess the JSON files.
 	# TODO Expand the url access to the other JSON file arguments ?
@@ -209,7 +215,7 @@ def get_arguments() -> Dict[str, Any]:
 	return config
 
 
-def load_config():
+def load_config() -> None:
 	"""
 	refine and set some arguments. Formerly at the scripts
 	"""
@@ -218,7 +224,7 @@ def load_config():
 	arguments['locale_config'] = locale.LocaleConfiguration.parse_arg(arguments)
 
 	if (archinstall_lang := arguments.get('archinstall-language', None)) is not None:
-		arguments['archinstall-language'] = TranslationHandler().get_language_by_name(archinstall_lang)
+		arguments['archinstall-language'] = translation_handler.get_language_by_name(archinstall_lang)
 
 	if disk_config := arguments.get('disk_config', {}):
 		arguments['disk_config'] = disk.DiskLayoutConfiguration.parse_arg(disk_config)
@@ -251,48 +257,49 @@ def load_config():
 		arguments['audio_config'] = models.AudioConfiguration.parse_arg(arguments['audio_config'])
 
 	if arguments.get('disk_encryption', None) is not None and disk_config is not None:
-		password = arguments.get('encryption_password', '')
 		arguments['disk_encryption'] = disk.DiskEncryption.parse_arg(
 			arguments['disk_config'],
 			arguments['disk_encryption'],
-			password
+			arguments.get('encryption_password', '')
 		)
 
 
-def post_process_arguments(arguments):
-	storage['arguments'] = arguments
-	if mountpoint := arguments.get('mount_point', None):
-		storage['MOUNT_POINT'] = Path(mountpoint)
+def post_process_arguments(args: dict[str, Any]) -> None:
+	storage['arguments'] = args
 
-	if arguments.get('debug', False):
+	if args.get('debug'):
 		warn(f"Warning: --debug mode will write certain credentials to {storage['LOG_PATH']}/{storage['LOG_FILE']}!")
 
-	if arguments.get('plugin', None):
-		path = arguments['plugin']
+	if args.get('plugin'):
+		path = args['plugin']
 		load_plugin(path)
 
-	load_config()
+	try:
+		load_config()
+	except ValueError as err:
+		warn(str(err))
+		exit(1)
 
 
 define_arguments()
-arguments: Dict[str, Any] = get_arguments()
+arguments: dict[str, Any] = get_arguments()
 post_process_arguments(arguments)
 
 
 # @archinstall.plugin decorator hook to programmatically add
 # plugins in runtime. Useful in profiles_bck and other things.
-def plugin(f, *args, **kwargs):
+def plugin(f, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
 	plugins[f.__name__] = f
 
 
-def _check_new_version():
+def _check_new_version() -> None:
 	info("Checking version...")
 
 	try:
 		Pacman.run("-Sy")
 	except Exception as e:
 		debug(f'Failed to perform version check: {e}')
-		info(f'Arch Linux mirrors are not reachable. Please check your internet connection')
+		info('Arch Linux mirrors are not reachable. Please check your internet connection')
 		exit(1)
 
 	upgrade = None
@@ -308,13 +315,13 @@ def _check_new_version():
 		time.sleep(3)
 
 
-def main():
+def main() -> None:
 	"""
 	This can either be run as the compiled and installed application: python setup.py install
 	OR straight as a module: python -m archinstall
 	In any case we will be attempting to load the provided script to be run from the scripts/ folder
 	"""
-	if not arguments.get('skip_version_check', False):
+	if not arguments.get('skip_version_check'):
 		_check_new_version()
 
 	script = arguments.get('script', None)
@@ -327,18 +334,26 @@ def main():
 	importlib.import_module(mod_name)
 
 
-def run_as_a_module():
+def run_as_a_module() -> None:
+	exc = None
+
 	try:
 		main()
 	except Exception as e:
-		err = ''.join(traceback.format_exception(e))
-		error(err)
+		exc = e
+	finally:
+		# restore the terminal to the original state
+		Tui.shutdown()
 
-		text = (
-			'Archinstall experienced the above error. If you think this is a bug, please report it to\n'
-			'https://github.com/archlinux/archinstall and include the log file "/var/log/archinstall/install.log".\n\n'
-			'Hint: To extract the log from a live ISO \ncurl -F\'file=@/var/log/archinstall/install.log\' https://0x0.st\n'
-		)
+		if exc:
+			err = ''.join(traceback.format_exception(exc))
+			error(err)
 
-		warn(text)
-		exit(1)
+			text = (
+				'Archinstall experienced the above error. If you think this is a bug, please report it to\n'
+				'https://github.com/archlinux/archinstall and include the log file "/var/log/archinstall/install.log".\n\n'
+				'Hint: To extract the log from a live ISO \ncurl -F\'file=@/var/log/archinstall/install.log\' https://0x0.st\n'
+			)
+
+			warn(text)
+			exit(1)

@@ -1,14 +1,13 @@
 from __future__ import annotations
 
+import gettext
 import json
 import os
-import gettext
 from dataclasses import dataclass
-
 from pathlib import Path
-from typing import List, Dict, Any, TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, override
 
-from .output import error, debug
+from .output import debug, error
 
 if TYPE_CHECKING:
 	_: Any
@@ -20,7 +19,7 @@ class Language:
 	name_en: str
 	translation: gettext.NullTranslations
 	translation_percent: int
-	translated_lang: Optional[str]
+	translated_lang: str | None
 
 	@property
 	def display_name(self) -> str:
@@ -39,7 +38,7 @@ class Language:
 
 
 class TranslationHandler:
-	def __init__(self):
+	def __init__(self) -> None:
 		self._base_pot = 'base.pot'
 		self._languages = 'languages.json'
 
@@ -47,10 +46,10 @@ class TranslationHandler:
 		self._translated_languages = self._get_translations()
 
 	@property
-	def translated_languages(self) -> List[Language]:
+	def translated_languages(self) -> list[Language]:
 		return self._translated_languages
 
-	def _get_translations(self) -> List[Language]:
+	def _get_translations(self) -> list[Language]:
 		"""
 		Load all translated languages and return a list of such
 		"""
@@ -60,7 +59,7 @@ class TranslationHandler:
 		languages = []
 
 		for short_form in defined_languages:
-			mapping_entry: Dict[str, Any] = next(filter(lambda x: x['abbr'] == short_form, mappings))
+			mapping_entry: dict[str, str] = next(filter(lambda x: x['abbr'] == short_form, mappings))
 			abbr = mapping_entry['abbr']
 			lang = mapping_entry['lang']
 			translated_lang = mapping_entry.get('translated_lang', None)
@@ -85,7 +84,7 @@ class TranslationHandler:
 
 		return languages
 
-	def _set_font(self, font: str):
+	def _set_font(self, font: str) -> None:
 		"""
 		Set the provided font as the new terminal font
 		"""
@@ -96,14 +95,14 @@ class TranslationHandler:
 		except Exception:
 			error(f'Unable to set font {font}')
 
-	def _load_language_mappings(self) -> List[Dict[str, Any]]:
+	def _load_language_mappings(self) -> list[dict[str, str]]:
 		"""
 		Load the mapping table of all known languages
 		"""
 		locales_dir = self._get_locales_dir()
 		languages = Path.joinpath(locales_dir, self._languages)
 
-		with open(languages, 'r') as fp:
+		with open(languages) as fp:
 			return json.load(fp)
 
 	def _get_catalog_size(self, translation: gettext.NullTranslations) -> int:
@@ -112,7 +111,7 @@ class TranslationHandler:
 		"""
 		# this is a very naughty way of retrieving the data but
 		# there's no alternative method exposed unfortunately
-		catalog = translation._catalog  # type: ignore
+		catalog = translation._catalog  # type: ignore[attr-defined]
 		messages = {k: v for k, v in catalog.items() if k and v}
 		return len(messages)
 
@@ -121,7 +120,7 @@ class TranslationHandler:
 		Get total messages that could be translated
 		"""
 		locales = self._get_locales_dir()
-		with open(f'{locales}/{self._base_pot}', 'r') as fp:
+		with open(f'{locales}/{self._base_pot}') as fp:
 			lines = fp.readlines()
 			msgid_lines = [line for line in lines if 'msgid' in line]
 
@@ -145,7 +144,7 @@ class TranslationHandler:
 		except Exception:
 			raise ValueError(f'No language with abbreviation "{abbr}" found')
 
-	def activate(self, language: Language):
+	def activate(self, language: Language) -> None:
 		"""
 		Set the provided language as the current translation
 		"""
@@ -159,7 +158,7 @@ class TranslationHandler:
 		locales_dir = Path.joinpath(cur_path, 'locales')
 		return locales_dir
 
-	def _provided_translations(self) -> List[str]:
+	def _provided_translations(self) -> list[str]:
 		"""
 		Get a list of all known languages
 		"""
@@ -181,6 +180,7 @@ class DeferredTranslation:
 	def __len__(self) -> int:
 		return len(self.message)
 
+	@override
 	def __str__(self) -> str:
 		translate = _
 		if translate is DeferredTranslation:
@@ -204,6 +204,9 @@ class DeferredTranslation:
 		return self.message.format(*args)
 
 	@classmethod
-	def install(cls):
+	def install(cls) -> None:
 		import builtins
-		builtins._ = cls  # type: ignore
+		builtins._ = cls  # type: ignore[attr-defined]
+
+
+translation_handler = TranslationHandler()

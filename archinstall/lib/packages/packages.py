@@ -1,13 +1,13 @@
 import dataclasses
 import json
 import ssl
-from typing import Dict, Any, Tuple, List
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import urlopen
+from urllib.response import addinfourl
 
 from ..exceptions import PackageError, SysCallError
-from ..models.gen import PackageSearch, PackageSearchResult, LocalPackage
+from ..models.gen import LocalPackage, PackageSearch, PackageSearchResult
 from ..pacman import Pacman
 
 BASE_URL_PKG_SEARCH = 'https://archlinux.org/packages/search/json/'
@@ -15,7 +15,7 @@ BASE_URL_PKG_SEARCH = 'https://archlinux.org/packages/search/json/'
 BASE_GROUP_URL = 'https://archlinux.org/groups/search/json/'
 
 
-def _make_request(url: str, params: Dict) -> Any:
+def _make_request(url: str, params: dict[str, str]) -> addinfourl:
 	ssl_context = ssl.create_default_context()
 	ssl_context.check_hostname = False
 	ssl_context.verify_mode = ssl.CERT_NONE
@@ -26,7 +26,7 @@ def _make_request(url: str, params: Dict) -> Any:
 	return urlopen(full_url, context=ssl_context)
 
 
-def group_search(name :str) -> List[PackageSearchResult]:
+def group_search(name: str) -> list[PackageSearchResult]:
 	# TODO UPSTREAM: Implement /json/ for the groups search
 	try:
 		response = _make_request(BASE_GROUP_URL, {'name': name})
@@ -42,7 +42,7 @@ def group_search(name :str) -> List[PackageSearchResult]:
 	return [PackageSearchResult(**package) for package in json.loads(data)['results']]
 
 
-def package_search(package :str) -> PackageSearch:
+def package_search(package: str) -> PackageSearch:
 	"""
 	Finds a specific package via the package database.
 	It makes a simple web-request, which might be a bit slow.
@@ -59,7 +59,7 @@ def package_search(package :str) -> PackageSearch:
 	return PackageSearch.from_json(json_data)
 
 
-def find_package(package :str) -> List[PackageSearchResult]:
+def find_package(package: str) -> list[PackageSearchResult]:
 	data = package_search(package)
 	results = []
 
@@ -77,7 +77,7 @@ def find_package(package :str) -> List[PackageSearchResult]:
 	return results
 
 
-def find_packages(*names :str) -> Dict[str, Any]:
+def find_packages(*names: str) -> dict[str, PackageSearchResult]:
 	"""
 	This function returns the search results for many packages.
 	The function itself is rather slow, so consider not sending to
@@ -91,7 +91,7 @@ def find_packages(*names :str) -> Dict[str, Any]:
 	return result
 
 
-def validate_package_list(packages :list) -> Tuple[list, list]:
+def validate_package_list(packages: list[str]) -> tuple[list[str], list[str]]:
 	"""
 	Validates a list of given packages.
 	return: Tuple of lists containing valid packavges in the first and invalid
@@ -103,7 +103,7 @@ def validate_package_list(packages :list) -> Tuple[list, list]:
 	return list(valid_packages), list(invalid_packages)
 
 
-def installed_package(package :str) -> LocalPackage:
+def installed_package(package: str) -> LocalPackage:
 	package_info = {}
 	try:
 		for line in Pacman.run(f"-Q --info {package}"):
@@ -113,4 +113,6 @@ def installed_package(package :str) -> LocalPackage:
 	except SysCallError:
 		pass
 
-	return LocalPackage({field.name: package_info.get(field.name) for field in dataclasses.fields(LocalPackage)})  # type: ignore
+	return LocalPackage(  # pylint: disable=no-value-for-parameter
+		{field.name: package_info.get(field.name) for field in dataclasses.fields(LocalPackage)}  # type: ignore
+	)

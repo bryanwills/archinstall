@@ -1,83 +1,80 @@
 from pathlib import Path
-from typing import Dict, List, Optional, Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, override
 
+from archinstall.tui import Alignment, EditMenu, ResultType
+
+from ..menu import ListManager
+from ..utils.util import prompt_dir
 from .device_model import SubvolumeModification
-from ..menu import Menu, TextInput, MenuSelectionType, ListManager
-from ..output import FormattedOutput
 
 if TYPE_CHECKING:
-	_: Any
+	from collections.abc import Callable
+
+	from archinstall.lib.translationhandler import DeferredTranslation
+
+	_: Callable[[str], DeferredTranslation]
 
 
 class SubvolumeMenu(ListManager):
-	def __init__(self, prompt: str, btrfs_subvols: List[SubvolumeModification]):
+	def __init__(
+		self,
+		btrfs_subvols: list[SubvolumeModification],
+		prompt: str | None = None
+	):
 		self._actions = [
 			str(_('Add subvolume')),
 			str(_('Edit subvolume')),
 			str(_('Delete subvolume'))
 		]
-		super().__init__(prompt, btrfs_subvols, [self._actions[0]], self._actions[1:])
 
-	def reformat(self, data: List[SubvolumeModification]) -> Dict[str, Optional[SubvolumeModification]]:
-		table = FormattedOutput.as_table(data)
-		rows = table.split('\n')
+		super().__init__(
+			btrfs_subvols,
+			[self._actions[0]],
+			self._actions[1:],
+			prompt
+		)
 
-		# these are the header rows of the table and do not map to any User obviously
-		# we're adding 2 spaces as prefix because the menu selector '> ' will be put before
-		# the selectable rows so the header has to be aligned
-		display_data: Dict[str, Optional[SubvolumeModification]] = {f'  {rows[0]}': None, f'  {rows[1]}': None}
+	@override
+	def selected_action_display(self, selection: SubvolumeModification) -> str:
+		return str(selection.name)
 
-		for row, subvol in zip(rows[2:], data):
-			row = row.replace('|', '\\|')
-			display_data[row] = subvol
+	def _add_subvolume(self, preset: SubvolumeModification | None = None) -> SubvolumeModification | None:
+		result = EditMenu(
+			str(_('Subvolume name')),
+			alignment=Alignment.CENTER,
+			allow_skip=True,
+			default_text=str(preset.name) if preset else None
+		).input()
 
-		return display_data
+		match result.type_:
+			case ResultType.Skip:
+				return preset
+			case ResultType.Selection:
+				name = result.text()
+			case ResultType.Reset:
+				raise ValueError('Unhandled result type')
 
-	def selected_action_display(self, subvolume: SubvolumeModification) -> str:
-		return str(subvolume.name)
+		header = f"{_('Subvolume name')}: {name}\n"
 
-	def _prompt_options(self, editing: Optional[SubvolumeModification] = None) -> List[str]:
-		preset_options = []
-		if editing:
-			preset_options = editing.mount_options
+		path = prompt_dir(
+			str(_("Subvolume mountpoint")),
+			header=header,
+			allow_skip=True,
+			validate=False
+		)
 
-		choice = Menu(
-			str(_("Select the desired subvolume options ")),
-			['nodatacow', 'compress'],
-			skip=True,
-			preset_values=preset_options,
-		).run()
-
-		if choice.type_ == MenuSelectionType.Selection:
-			return choice.value  # type: ignore
-
-		return []
-
-	def _add_subvolume(self, editing: Optional[SubvolumeModification] = None) -> Optional[SubvolumeModification]:
-		name = TextInput(f'\n\n{_("Subvolume name")}: ', editing.name if editing else '').run()
-
-		if not name:
+		if not path:
 			return None
 
-		mountpoint = TextInput(f'{_("Subvolume mountpoint")}: ', str(editing.mountpoint) if editing else '').run()
+		return SubvolumeModification(Path(name), path)
 
-		if not mountpoint:
-			return None
-
-		options = self._prompt_options(editing)
-
-		subvolume = SubvolumeModification(Path(name), Path(mountpoint))
-		subvolume.compress = 'compress' in options
-		subvolume.nodatacow = 'nodatacow' in options
-
-		return subvolume
-
+	@override
 	def handle_action(
 		self,
 		action: str,
-		entry: Optional[SubvolumeModification],
-		data: List[SubvolumeModification]
-	) -> List[SubvolumeModification]:
+		entry: SubvolumeModification | None,
+		data: list[SubvolumeModification]
+	) -> list[SubvolumeModification]:
 		if action == self._actions[0]:  # add
 			new_subvolume = self._add_subvolume()
 

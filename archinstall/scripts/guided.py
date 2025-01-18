@@ -1,111 +1,45 @@
 from pathlib import Path
-from typing import Any, TYPE_CHECKING, Optional
 
 import archinstall
-from archinstall import info, debug
-from archinstall import SysInfo
-from archinstall.lib import locale
-from archinstall.lib import disk
-from archinstall.lib.global_menu import GlobalMenu
+from archinstall import SysInfo, debug, info
+from archinstall.lib import disk, locale
 from archinstall.lib.configuration import ConfigurationOutput
+from archinstall.lib.global_menu import GlobalMenu
 from archinstall.lib.installer import Installer
-from archinstall.lib.menu import Menu
-from archinstall.lib.mirrors import use_mirrors, add_custom_mirrors
-from archinstall.lib.models import AudioConfiguration
-from archinstall.lib.models.bootloader import Bootloader
+from archinstall.lib.interactions.general_conf import ask_chroot
+from archinstall.lib.models import AudioConfiguration, Bootloader
 from archinstall.lib.models.network_configuration import NetworkConfiguration
 from archinstall.lib.profile.profiles_handler import profile_handler
-
-if TYPE_CHECKING:
-	_: Any
-
+from archinstall.tui import Tui
 
 if archinstall.arguments.get('help'):
 	print("See `man archinstall` for help.")
 	exit(0)
 
 
-def ask_user_questions():
+def ask_user_questions() -> None:
 	"""
-		First, we'll ask the user for a bunch of user input.
-		Not until we're satisfied with what we want to install
-		will we continue with the actual installation steps.
+	First, we'll ask the user for a bunch of user input.
+	Not until we're satisfied with what we want to install
+	will we continue with the actual installation steps.
 	"""
 
-	# ref: https://github.com/archlinux/archinstall/pull/831
-	# we'll set NTP to true by default since this is also
-	# the default value specified in the menu options; in
-	# case it will be changed by the user we'll also update
-	# the system immediately
-	global_menu = GlobalMenu(data_store=archinstall.arguments)
+	with Tui():
+		global_menu = GlobalMenu(data_store=archinstall.arguments)
 
-	global_menu.enable('archinstall-language')
+		if not archinstall.arguments.get('advanced', False):
+			global_menu.set_enabled('parallel downloads', False)
 
-	# Set which region to download packages from during the installation
-	global_menu.enable('mirror_config')
-
-	global_menu.enable('locale_config')
-
-	global_menu.enable('disk_config', mandatory=True)
-
-	# Specify disk encryption options
-	global_menu.enable('disk_encryption')
-
-	# Ask which boot-loader to use (will only ask if we're in UEFI mode, otherwise will default to GRUB)
-	global_menu.enable('bootloader')
-
-	global_menu.enable('uki')
-
-	global_menu.enable('swap')
-
-	# Get the hostname for the machine
-	global_menu.enable('hostname')
-
-	# Ask for a root password (optional, but triggers requirement for super-user if skipped)
-	global_menu.enable('!root-password', mandatory=True)
-
-	global_menu.enable('!users', mandatory=True)
-
-	# Ask for archinstall-specific profiles_bck (such as desktop environments etc)
-	global_menu.enable('profile_config')
-
-	# Ask about audio server selection if one is not already set
-	global_menu.enable('audio_config')
-
-	# Ask for preferred kernel:
-	global_menu.enable('kernels', mandatory=True)
-
-	global_menu.enable('packages')
-
-	if archinstall.arguments.get('advanced', False):
-		# Enable parallel downloads
-		global_menu.enable('parallel downloads')
-
-	# Ask or Call the helper function that asks the user to optionally configure a network.
-	global_menu.enable('network_config')
-
-	global_menu.enable('timezone')
-
-	global_menu.enable('ntp')
-
-	global_menu.enable('additional-repositories')
-
-	global_menu.enable('__separator__')
-
-	global_menu.enable('save_config')
-	global_menu.enable('install')
-	global_menu.enable('abort')
-
-	global_menu.run()
+		global_menu.run()
 
 
-def perform_installation(mountpoint: Path):
+def perform_installation(mountpoint: Path) -> None:
 	"""
 	Performs the installation steps on a block device.
 	Only requirement is that the block devices are
 	formatted and setup prior to entering this function.
 	"""
-	info('Starting installation')
+	info('Starting installation...')
 	disk_config: disk.DiskLayoutConfiguration = archinstall.arguments['disk_config']
 
 	# Retrieve list of additional repositories and set boolean values appropriately
@@ -132,23 +66,19 @@ def perform_installation(mountpoint: Path):
 				# generate encryption key files for the mounted luks devices
 				installation.generate_key_files()
 
-		# Set mirrors used by pacstrap (outside of installation)
 		if mirror_config := archinstall.arguments.get('mirror_config', None):
-			if mirror_config.mirror_regions:
-				use_mirrors(mirror_config.mirror_regions)
-			if mirror_config.custom_mirrors:
-				add_custom_mirrors(mirror_config.custom_mirrors)
+			installation.set_mirrors(mirror_config, on_target=False)
 
 		installation.minimal_installation(
 			testing=enable_testing,
 			multilib=enable_multilib,
 			mkinitcpio=run_mkinitcpio,
-			hostname=archinstall.arguments.get('hostname', 'archlinux'),
+			hostname=archinstall.arguments.get('hostname'),
 			locale_config=locale_config
 		)
 
 		if mirror_config := archinstall.arguments.get('mirror_config', None):
-			installation.set_mirrors(mirror_config)  # Set the mirrors in the installation medium
+			installation.set_mirrors(mirror_config, on_target=True)
 
 		if archinstall.arguments.get('swap'):
 			installation.setup_swap('zram')
@@ -163,7 +93,7 @@ def perform_installation(mountpoint: Path):
 
 		# If user selected to copy the current ISO network configuration
 		# Perform a copy of the config
-		network_config: Optional[NetworkConfiguration] = archinstall.arguments.get('network_config', None)
+		network_config: NetworkConfiguration | None = archinstall.arguments.get('network_config', None)
 
 		if network_config:
 			network_config.install_network_config(
@@ -174,7 +104,7 @@ def perform_installation(mountpoint: Path):
 		if users := archinstall.arguments.get('!users', None):
 			installation.create_users(users)
 
-		audio_config: Optional[AudioConfiguration] = archinstall.arguments.get('audio_config', None)
+		audio_config: AudioConfiguration | None = archinstall.arguments.get('audio_config', None)
 		if audio_config:
 			audio_config.install_audio_config(installation)
 		else:
@@ -198,10 +128,6 @@ def perform_installation(mountpoint: Path):
 		if (root_pw := archinstall.arguments.get('!root-password', None)) and len(root_pw):
 			installation.user_set_pw('root', root_pw)
 
-		# This step must be after profile installs to allow profiles_bck to install language pre-requisites.
-		# After which, this step will set the language both for console and x11 if x11 was installed for instance.
-		installation.set_keyboard_language(locale_config.kb_layout)
-
 		if profile_config := archinstall.arguments.get('profile_config', None):
 			profile_config.profile.post_install(installation)
 
@@ -219,38 +145,42 @@ def perform_installation(mountpoint: Path):
 		info("For post-installation tips, see https://wiki.archlinux.org/index.php/Installation_guide#Post-installation")
 
 		if not archinstall.arguments.get('silent'):
-			prompt = str(_('Would you like to chroot into the newly created installation and perform post-installation configuration?'))
-			choice = Menu(prompt, Menu.yes_no(), default_option=Menu.yes()).run()
-			if choice.value == Menu.yes():
+			with Tui():
+				chroot = ask_chroot()
+
+			if chroot:
 				try:
 					installation.drop_to_shell()
-				except:
+				except Exception:
 					pass
 
-	debug(f"Disk states after installing: {disk.disk_layouts()}")
+	debug(f"Disk states after installing:\n{disk.disk_layouts()}")
 
 
-if not archinstall.arguments.get('silent'):
-	ask_user_questions()
+def guided() -> None:
+	if not archinstall.arguments.get('silent'):
+		ask_user_questions()
 
-config_output = ConfigurationOutput(archinstall.arguments)
+	config = ConfigurationOutput(archinstall.arguments)
+	config.write_debug()
+	config.save()
 
-if not archinstall.arguments.get('silent'):
-	config_output.show()
+	if archinstall.arguments.get('dry_run'):
+		exit(0)
 
-config_output.save()
+	if not archinstall.arguments.get('silent'):
+		with Tui():
+			if not config.confirm_config():
+				debug('Installation aborted')
+				guided()
 
-if archinstall.arguments.get('dry_run'):
-	exit(0)
+	fs_handler = disk.FilesystemHandler(
+		archinstall.arguments['disk_config'],
+		archinstall.arguments.get('disk_encryption', None)
+	)
 
-if not archinstall.arguments.get('silent'):
-	input(str(_('Press Enter to continue.')))
+	fs_handler.perform_filesystem_operations()
+	perform_installation(archinstall.arguments.get('mount_point', Path('/mnt')))
 
-fs_handler = disk.FilesystemHandler(
-	archinstall.arguments['disk_config'],
-	archinstall.arguments.get('disk_encryption', None)
-)
 
-fs_handler.perform_filesystem_operations()
-
-perform_installation(archinstall.storage.get('MOUNT_POINT', Path('/mnt')))
+guided()

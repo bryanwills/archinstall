@@ -26,7 +26,7 @@ To start the installer, run the following in the latest Arch Linux ISO:
 
     archinstall
 
-Since the `Guided Installer`_ is the default script, this is the equvilant of running :code:`archinstall guided`
+Since the `Guided Installer`_ is the default script, this is the equivalent of running :code:`archinstall guided`
 
 
 The guided installation also supports installing with pre-configured answers to all the guided steps. This can be a quick and convenient way to re-run one or several installations.
@@ -70,7 +70,7 @@ The contents of :code:`https://domain.lan/config.json`:
                        {
                            "btrfs": [],
                            "flags": [
-                               "Boot"
+                               "boot"
                            ],
                            "fs_type": "fat32",
                            "length": {
@@ -238,8 +238,8 @@ The contents of :code:`https://domain.lan/config.json`:
 Options for ``--creds``
 -----------------------
 
-| Creds is a separate configuration file to separate normal options from more sensitive data like passwords.
-| Below is an example of how to set the root password and below that are description of other values that can be set.
+Creds is a separate configuration file to separate normal options from more sensitive data like passwords.
+Below is an example of how to set the root password and below that are description of other values that can be set.
 
 .. code-block:: json
 
@@ -269,7 +269,7 @@ Options for ``--creds``
           {
               "username": "<USERNAME>",
               "!password": "<PASSWORD>",
-              "sudo": false   
+              "sudo": false
           }
      - List of regular user credentials, see configuration for reference
      - Maybe

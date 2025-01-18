@@ -2,45 +2,45 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import shlex
-import subprocess
 import stat
 import string
+import subprocess
 import sys
 import time
-import re
-import urllib.parse
-from urllib.request import Request, urlopen
 import urllib.error
-import pathlib
-from datetime import datetime, date
+import urllib.parse
+from collections.abc import Callable, Iterator
+from datetime import date, datetime
 from enum import Enum
-from typing import Callable, Optional, Dict, Any, List, Union, Iterator, TYPE_CHECKING
-from select import epoll, EPOLLIN, EPOLLHUP
+from pathlib import Path
+from select import EPOLLHUP, EPOLLIN, epoll
 from shutil import which
+from typing import TYPE_CHECKING, Any, override
+from urllib.request import Request, urlopen
 
 from .exceptions import RequirementError, SysCallError
 from .output import debug, error, info
 from .storage import storage
 
-
 if TYPE_CHECKING:
 	from .installer import Installer
 
 
-def generate_password(length :int = 64) -> str:
-	haystack = string.printable # digits, ascii_letters, punctuation (!"#$[] etc) and whitespace
+def generate_password(length: int = 64) -> str:
+	haystack = string.printable  # digits, ascii_letters, punctuation (!"#$[] etc) and whitespace
 	return ''.join(secrets.choice(haystack) for i in range(length))
 
 
-def locate_binary(name :str) -> str:
+def locate_binary(name: str) -> str:
 	if path := which(name):
 		return path
 	raise RequirementError(f"Binary {name} does not exist.")
 
 
-def clear_vt100_escape_codes(data :Union[bytes, str]) -> Union[bytes, str]:
+def clear_vt100_escape_codes(data: bytes | str) -> bytes | str:
 	# https://stackoverflow.com/a/43627833/929999
 	vt100_escape_regex = r'\x1B\[[?0-9;]*[a-zA-Z]'
 	if isinstance(data, bytes):
@@ -69,24 +69,26 @@ def jsonify(obj: Any, safe: bool = True) -> Any:
 		# a dictionary representation of the object so that it can be
 		# processed by the json library.
 		return jsonify(obj.json(), safe)
-	if isinstance(obj, (datetime, date)):
+	if isinstance(obj, datetime | date):
 		return obj.isoformat()
-	if isinstance(obj, (list, set, tuple)):
+	if isinstance(obj, list | set | tuple):
 		return [jsonify(item, safe) for item in obj]
-	if isinstance(obj, pathlib.Path):
+	if isinstance(obj, Path):
 		return str(obj)
 	if hasattr(obj, "__dict__"):
 		return vars(obj)
 
 	return obj
 
+
 class JSON(json.JSONEncoder, json.JSONDecoder):
 	"""
 	A safe JSON encoder that will omit private information in dicts (starting with !)
 	"""
 
-	def encode(self, obj: Any) -> str:
-		return super().encode(jsonify(obj))
+	@override
+	def encode(self, o: Any) -> str:
+		return super().encode(jsonify(o))
 
 
 class UNSAFE_JSON(json.JSONEncoder, json.JSONDecoder):
@@ -94,47 +96,47 @@ class UNSAFE_JSON(json.JSONEncoder, json.JSONDecoder):
 	UNSAFE_JSON will call/encode and keep private information in dicts (starting with !)
 	"""
 
-	def encode(self, obj: Any) -> str:
-		return super().encode(jsonify(obj, safe=False))
+	@override
+	def encode(self, o: Any) -> str:
+		return super().encode(jsonify(o, safe=False))
 
 
 class SysCommandWorker:
 	def __init__(
 		self,
-		cmd :Union[str, List[str]],
-		callbacks :Optional[Dict[str, Any]] = None,
-		peek_output :Optional[bool] = False,
-		environment_vars :Optional[Dict[str, Any]] = None,
-		logfile :Optional[None] = None,
-		working_directory :Optional[str] = './',
-		remove_vt100_escape_codes_from_lines :bool = True
+		cmd: str | list[str],
+		callbacks: dict[str, Any] | None = None,
+		peek_output: bool | None = False,
+		environment_vars: dict[str, str] | None = None,
+		logfile: None = None,
+		working_directory: str | None = './',
+		remove_vt100_escape_codes_from_lines: bool = True
 	):
-		callbacks = callbacks or {}
-		environment_vars = environment_vars or {}
-
 		if isinstance(cmd, str):
 			cmd = shlex.split(cmd)
 
-		if cmd:
-			if cmd[0][0] != '/' and cmd[0][:2] != './': # pathlib.Path does not work well
-				cmd[0] = locate_binary(cmd[0])
+		if cmd and not cmd[0].startswith(('/', './')):  # Path() does not work well
+			cmd[0] = locate_binary(cmd[0])
 
 		self.cmd = cmd
-		self.callbacks = callbacks
+		self.callbacks = callbacks or {}
 		self.peek_output = peek_output
 		# define the standard locale for command outputs. For now the C ascii one. Can be overridden
-		self.environment_vars = {**storage.get('CMD_LOCALE',{}),**environment_vars}
+		self.environment_vars = {'LC_ALL': 'C'}
+		if environment_vars:
+			self.environment_vars.update(environment_vars)
+
 		self.logfile = logfile
 		self.working_directory = working_directory
 
-		self.exit_code :Optional[int] = None
+		self.exit_code: int | None = None
 		self._trace_log = b''
 		self._trace_log_pos = 0
 		self.poll_object = epoll()
-		self.child_fd :Optional[int] = None
-		self.started :Optional[float] = None
-		self.ended :Optional[float] = None
-		self.remove_vt100_escape_codes_from_lines :bool = remove_vt100_escape_codes_from_lines
+		self.child_fd: int | None = None
+		self.started: float | None = None
+		self.ended: float | None = None
+		self.remove_vt100_escape_codes_from_lines: bool = remove_vt100_escape_codes_from_lines
 
 	def __contains__(self, key: bytes) -> bool:
 		"""
@@ -150,21 +152,23 @@ class SysCommandWorker:
 
 		return False
 
-	def __iter__(self, *args :str, **kwargs :Dict[str, Any]) -> Iterator[bytes]:
+	def __iter__(self, *args: str, **kwargs: dict[str, Any]) -> Iterator[bytes]:
 		last_line = self._trace_log.rfind(b'\n')
 		lines = filter(None, self._trace_log[self._trace_log_pos:last_line].splitlines())
 		for line in lines:
 			if self.remove_vt100_escape_codes_from_lines:
-				line = clear_vt100_escape_codes(line)  # type: ignore
+				line = clear_vt100_escape_codes(line)  # type: ignore[assignment]
 
 			yield line + b'\n'
 
 		self._trace_log_pos = last_line
 
+	@override
 	def __repr__(self) -> str:
 		self.make_sure_we_are_executing()
 		return str(self._trace_log)
 
+	@override
 	def __str__(self) -> str:
 		try:
 			return self._trace_log.decode('utf-8')
@@ -174,14 +178,14 @@ class SysCommandWorker:
 	def __enter__(self) -> 'SysCommandWorker':
 		return self
 
-	def __exit__(self, *args :str) -> None:
+	def __exit__(self, *args: str) -> None:
 		# b''.join(sys_command('sync')) # No need to, since the underlying fs() object will call sync.
 		# TODO: https://stackoverflow.com/questions/28157929/how-to-safely-handle-an-exception-inside-a-context-manager
 
 		if self.child_fd:
 			try:
 				os.close(self.child_fd)
-			except:
+			except Exception:
 				pass
 
 		if self.peek_output:
@@ -208,14 +212,13 @@ class SysCommandWorker:
 
 		return False
 
-	def write(self, data: bytes, line_ending :bool = True) -> int:
+	def write(self, data: bytes, line_ending: bool = True) -> int:
 		assert isinstance(data, bytes)  # TODO: Maybe we can support str as well and encode it
 
 		self.make_sure_we_are_executing()
 
 		if self.child_fd:
 			return os.write(self.child_fd, data + (b'\n' if line_ending else b''))
-			os.fsync(self.child_fd)
 
 		return 0
 
@@ -228,12 +231,12 @@ class SysCommandWorker:
 		self.make_sure_we_are_executing()
 		return self._trace_log_pos
 
-	def seek(self, pos :int) -> None:
+	def seek(self, pos: int) -> None:
 		self.make_sure_we_are_executing()
 		# Safety check to ensure 0 < pos < len(tracelog)
 		self._trace_log_pos = min(max(0, pos), len(self._trace_log))
 
-	def peak(self, output: Union[str, bytes]) -> bool:
+	def peak(self, output: str | bytes) -> bool:
 		if self.peek_output:
 			if isinstance(output, bytes):
 				try:
@@ -241,7 +244,7 @@ class SysCommandWorker:
 				except UnicodeDecodeError:
 					return False
 
-			peak_logfile = pathlib.Path(f"{storage['LOG_PATH']}/cmd_output.txt")
+			peak_logfile = Path(f"{storage['LOG_PATH']}/cmd_output.txt")
 
 			change_perm = False
 			if peak_logfile.exists() is False:
@@ -251,7 +254,7 @@ class SysCommandWorker:
 				peek_output_log.write(str(output))
 
 			if change_perm:
-				os.chmod(str(peak_logfile), stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP)
+				peak_logfile.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP)
 
 			sys.stdout.write(str(output))
 			sys.stdout.flush()
@@ -263,7 +266,7 @@ class SysCommandWorker:
 
 		if self.child_fd:
 			got_output = False
-			for fileno, event in self.poll_object.poll(0.1):
+			for _fileno, _event in self.poll_object.poll(0.1):
 				try:
 					output = os.read(self.child_fd, 8192)
 					got_output = True
@@ -300,30 +303,27 @@ class SysCommandWorker:
 
 		# https://stackoverflow.com/questions/4022600/python-pty-fork-how-does-it-work
 		if not self.pid:
-			history_logfile = pathlib.Path(f"{storage['LOG_PATH']}/cmd_history.txt")
+			history_logfile = Path(f"{storage['LOG_PATH']}/cmd_history.txt")
+
+			change_perm = False
+			if history_logfile.exists() is False:
+				change_perm = True
+
 			try:
-				change_perm = False
-				if history_logfile.exists() is False:
-					change_perm = True
+				with history_logfile.open("a") as cmd_log:
+					cmd_log.write(f"{time.time()} {self.cmd}\n")
 
-				try:
-					with history_logfile.open("a") as cmd_log:
-						cmd_log.write(f"{time.time()} {self.cmd}\n")
+				if change_perm:
+					history_logfile.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP)
+			except (PermissionError, FileNotFoundError):
+				# If history_logfile does not exist, ignore the error
+				pass
 
-					if change_perm:
-						os.chmod(str(history_logfile), stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP)
-				except (PermissionError, FileNotFoundError):
-					# If history_logfile does not exist, ignore the error
-					pass
-				except Exception as e:
-					exception_type = type(e).__name__
-					error(f"Unexpected {exception_type} occurred in {self.cmd}: {e}")
-					raise e
+			if storage.get('arguments', {}).get('debug'):
+				debug(f"Executing: {self.cmd}")
 
+			try:
 				os.execve(self.cmd[0], list(self.cmd), {**os.environ, **self.environment_vars})
-				if storage['arguments'].get('debug'):
-					debug(f"Executing: {self.cmd}")
-
 			except FileNotFoundError:
 				error(f"{self.cmd[0]} does not exist.")
 				self.exit_code = 1
@@ -337,19 +337,20 @@ class SysCommandWorker:
 
 		return True
 
-	def decode(self, encoding :str = 'UTF-8') -> str:
+	def decode(self, encoding: str = 'UTF-8') -> str:
 		return self._trace_log.decode(encoding)
 
 
 class SysCommand:
-	def __init__(self,
-		cmd :Union[str, List[str]],
-		callbacks :Dict[str, Callable[[Any], Any]] = {},
-		start_callback :Optional[Callable[[Any], Any]] = None,
-		peek_output :Optional[bool] = False,
-		environment_vars :Optional[Dict[str, Any]] = None,
-		working_directory :Optional[str] = './',
-		remove_vt100_escape_codes_from_lines :bool = True):
+	def __init__(
+		self,
+		cmd: str | list[str],
+		callbacks: dict[str, Callable[[Any], Any]] = {},
+		start_callback: Callable[[Any], Any] | None = None,
+		peek_output: bool | None = False,
+		environment_vars: dict[str, str] | None = None,
+		working_directory: str | None = './',
+		remove_vt100_escape_codes_from_lines: bool = True):
 
 		self._callbacks = callbacks.copy()
 		if start_callback:
@@ -361,27 +362,26 @@ class SysCommand:
 		self.working_directory = working_directory
 		self.remove_vt100_escape_codes_from_lines = remove_vt100_escape_codes_from_lines
 
-		self.session :Optional[SysCommandWorker] = None
+		self.session: SysCommandWorker | None = None
 		self.create_session()
 
-	def __enter__(self) -> Optional[SysCommandWorker]:
+	def __enter__(self) -> SysCommandWorker | None:
 		return self.session
 
-	def __exit__(self, *args :str, **kwargs :Dict[str, Any]) -> None:
+	def __exit__(self, *args: str, **kwargs: dict[str, Any]) -> None:
 		# b''.join(sys_command('sync')) # No need to, since the underlying fs() object will call sync.
 		# TODO: https://stackoverflow.com/questions/28157929/how-to-safely-handle-an-exception-inside-a-context-manager
 
 		if len(args) >= 2 and args[1]:
 			error(args[1])
 
-	def __iter__(self, *args :List[Any], **kwargs :Dict[str, Any]) -> Iterator[bytes]:
+	def __iter__(self, *args: list[Any], **kwargs: dict[str, Any]) -> Iterator[bytes]:
 		if self.session:
-			for line in self.session:
-				yield line
+			yield from self.session
 
-	def __getitem__(self, key :slice) -> Optional[bytes]:
+	def __getitem__(self, key: slice) -> bytes | None:
 		if not self.session:
-			raise KeyError(f"SysCommand() does not have an active session.")
+			raise KeyError("SysCommand() does not have an active session.")
 		elif type(key) is slice:
 			start = key.start or 0
 			end = key.stop or len(self.session._trace_log)
@@ -390,17 +390,9 @@ class SysCommand:
 		else:
 			raise ValueError("SysCommand() doesn't have key & value pairs, only slices, SysCommand('ls')[:10] as an example.")
 
-	def __repr__(self, *args :List[Any], **kwargs :Dict[str, Any]) -> str:
+	@override
+	def __repr__(self, *args: list[Any], **kwargs: dict[str, Any]) -> str:
 		return self.decode('UTF-8', errors='backslashreplace') or ''
-
-	def __json__(self) -> Dict[str, Union[str, bool, List[str], Dict[str, Any], Optional[bool], Optional[Dict[str, Any]]]]:
-		return {
-			'cmd': self.cmd,
-			'callbacks': self._callbacks,
-			'peak': self.peek_output,
-			'environment_vars': self.environment_vars,
-			'session': self.session is not None
-		}
 
 	def create_session(self) -> bool:
 		"""
@@ -430,7 +422,7 @@ class SysCommand:
 
 		return True
 
-	def decode(self, encoding: str = 'utf-8', errors='backslashreplace', strip: bool = True) -> str:
+	def decode(self, encoding: str = 'utf-8', errors: str = 'backslashreplace', strip: bool = True) -> str:
 		if not self.session:
 			raise ValueError('No session available to decode')
 
@@ -440,15 +432,24 @@ class SysCommand:
 			return val.strip()
 		return val
 
+	def output(self, remove_cr: bool = True) -> bytes:
+		if not self.session:
+			raise ValueError('No session available')
+
+		if remove_cr:
+			return self.session._trace_log.replace(b'\r\n', b'\n')
+
+		return self.session._trace_log
+
 	@property
-	def exit_code(self) -> Optional[int]:
+	def exit_code(self) -> int | None:
 		if self.session:
 			return self.session.exit_code
 		else:
 			return None
 
 	@property
-	def trace_log(self) -> Optional[bytes]:
+	def trace_log(self) -> bytes | None:
 		if self.session:
 			return self.session._trace_log
 		return None
@@ -456,12 +457,12 @@ class SysCommand:
 
 def _pid_exists(pid: int) -> bool:
 	try:
-		return any(subprocess.check_output(['/usr/bin/ps', '--no-headers', '-o', 'pid', '-p', str(pid)]).strip())
+		return any(subprocess.check_output(['ps', '--no-headers', '-o', 'pid', '-p', str(pid)]).strip())
 	except subprocess.CalledProcessError:
 		return False
 
 
-def run_custom_user_commands(commands :List[str], installation :Installer) -> None:
+def run_custom_user_commands(commands: list[str], installation: Installer) -> None:
 	for index, command in enumerate(commands):
 		script_path = f"/var/tmp/user-command.{index}.sh"
 		chroot_path = f"{installation.target}/{script_path}"
@@ -475,7 +476,7 @@ def run_custom_user_commands(commands :List[str], installation :Installer) -> No
 		os.unlink(chroot_path)
 
 
-def json_stream_to_structure(configuration_identifier : str, stream :str, target :dict) -> bool :
+def json_stream_to_structure(configuration_identifier: str, stream: str, target: dict[str, Any]) -> bool:
 	"""
 	Load a JSON encoded dictionary from a stream and merge it into an existing dictionary.
 	A stream can be a filepath, a URL or a raw JSON string.
@@ -483,7 +484,7 @@ def json_stream_to_structure(configuration_identifier : str, stream :str, target
 	+configuration_identifier is just a parameter to get meaningful, but not so long messages
 	"""
 
-	raw: Optional[str] = None
+	raw: str | None = None
 	# Try using the stream as a URL that should be grabbed
 	if urllib.parse.urlparse(stream).scheme:
 		try:
@@ -494,7 +495,7 @@ def json_stream_to_structure(configuration_identifier : str, stream :str, target
 			return False
 
 	# Try using the stream as a filepath that should be read
-	if raw is None and (path := pathlib.Path(stream)).exists():
+	if raw is None and (path := Path(stream)).exists():
 		try:
 			raw = path.read_text()
 		except Exception as err:
@@ -514,6 +515,6 @@ def json_stream_to_structure(configuration_identifier : str, stream :str, target
 	return True
 
 
-def secret(x :str):
+def secret(x: str) -> str:
 	""" return * with len equal to to the input string """
 	return '*' * len(x)

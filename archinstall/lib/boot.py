@@ -1,5 +1,6 @@
 import time
-from typing import Iterator, Optional
+from collections.abc import Iterator
+
 from .exceptions import SysCallError
 from .general import SysCommand, SysCommandWorker, locate_binary
 from .installer import Installer
@@ -11,7 +12,7 @@ class Boot:
 	def __init__(self, installation: Installer):
 		self.instance = installation
 		self.container_name = 'archinstall'
-		self.session: Optional[SysCommandWorker] = None
+		self.session: SysCommandWorker | None = None
 		self.ready = False
 
 	def __enter__(self) -> 'Boot':
@@ -25,7 +26,7 @@ class Boot:
 			# '-P' or --console=pipe  could help us not having to do a bunch
 			# of os.write() calls, but instead use pipes (stdin, stdout and stderr) as usual.
 			self.session = SysCommandWorker([
-				'/usr/bin/systemd-nspawn',
+				'systemd-nspawn',
 				'-D', str(self.instance.target),
 				'--timezone=off',
 				'-b',
@@ -42,7 +43,7 @@ class Boot:
 		storage['active_boot'] = self
 		return self
 
-	def __exit__(self, *args :str, **kwargs :str) -> None:
+	def __exit__(self, *args: str, **kwargs: str) -> None:
 		# b''.join(sys_command('sync')) # No need to, since the underlying fs() object will call sync.
 		# TODO: https://stackoverflow.com/questions/28157929/how-to-safely-handle-an-exception-inside-a-context-manager
 
@@ -53,7 +54,7 @@ class Boot:
 			)
 
 		shutdown = None
-		shutdown_exit_code: Optional[int] = -1
+		shutdown_exit_code: int | None = -1
 
 		try:
 			shutdown = SysCommand(f'systemd-run --machine={self.container_name} --pty shutdown now')
@@ -79,8 +80,7 @@ class Boot:
 
 	def __iter__(self) -> Iterator[bytes]:
 		if self.session:
-			for value in self.session:
-				yield value
+			yield from self.session
 
 	def __contains__(self, key: bytes) -> bool:
 		if self.session is None:
@@ -94,7 +94,7 @@ class Boot:
 
 		return self.session.is_alive()
 
-	def SysCommand(self, cmd: list, *args, **kwargs) -> SysCommand:
+	def SysCommand(self, cmd: list[str], *args, **kwargs) -> SysCommand:
 		if cmd[0][0] != '/' and cmd[0][:2] != './':
 			# This check is also done in SysCommand & SysCommandWorker.
 			# However, that check is done for `machinectl` and not for our chroot command.
@@ -104,7 +104,7 @@ class Boot:
 
 		return SysCommand(["systemd-run", f"--machine={self.container_name}", "--pty", *cmd], *args, **kwargs)
 
-	def SysCommandWorker(self, cmd: list, *args, **kwargs) -> SysCommandWorker:
+	def SysCommandWorker(self, cmd: list[str], *args, **kwargs) -> SysCommandWorker:
 		if cmd[0][0] != '/' and cmd[0][:2] != './':
 			cmd[0] = locate_binary(cmd[0])
 

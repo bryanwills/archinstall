@@ -2,20 +2,20 @@ from __future__ import annotations
 
 import getpass
 from pathlib import Path
-from typing import List
+from typing import ClassVar
 
-from .device_model import PartitionModification, Fido2Device
+from ..exceptions import SysCallError
 from ..general import SysCommand, SysCommandWorker, clear_vt100_escape_codes
 from ..output import error, info
-from ..exceptions import SysCallError
+from .device_model import Fido2Device
 
 
 class Fido2:
 	_loaded: bool = False
-	_fido2_devices: List[Fido2Device] = []
+	_fido2_devices: ClassVar[list[Fido2Device]] = []
 
 	@classmethod
-	def get_fido2_devices(cls, reload: bool = False) -> List[Fido2Device]:
+	def get_fido2_devices(cls, reload: bool = False) -> list[Fido2Device]:
 		"""
 		Uses systemd-cryptenroll to list the FIDO2 devices
 		connected that supports FIDO2.
@@ -43,7 +43,7 @@ class Fido2:
 				error('fido2 support is most likely not installed')
 				raise ValueError('HSM devices can not be detected, is libfido2 installed?')
 
-			fido_devices: str = clear_vt100_escape_codes(ret)  # type: ignore
+			fido_devices: str = clear_vt100_escape_codes(ret)  # type: ignore[assignment]
 
 			manufacturer_pos = 0
 			product_pos = 0
@@ -72,20 +72,20 @@ class Fido2:
 	def fido2_enroll(
 		cls,
 		hsm_device: Fido2Device,
-		part_mod: PartitionModification,
+		dev_path: Path,
 		password: str
-	):
-		worker = SysCommandWorker(f"systemd-cryptenroll --fido2-device={hsm_device.path} {part_mod.dev_path}", peek_output=True)
+	) -> None:
+		worker = SysCommandWorker(f"systemd-cryptenroll --fido2-device={hsm_device.path} {dev_path}", peek_output=True)
 		pw_inputted = False
 		pin_inputted = False
 
 		while worker.is_alive():
 			if pw_inputted is False:
-				if bytes(f"please enter current passphrase for disk {part_mod.dev_path}", 'UTF-8') in worker._trace_log.lower():
+				if bytes(f"please enter current passphrase for disk {dev_path}", 'UTF-8') in worker._trace_log.lower():
 					worker.write(bytes(password, 'UTF-8'))
 					pw_inputted = True
 			elif pin_inputted is False:
-				if bytes(f"please enter security token pin", 'UTF-8') in worker._trace_log.lower():
+				if bytes("please enter security token pin", 'UTF-8') in worker._trace_log.lower():
 					worker.write(bytes(getpass.getpass(" "), 'UTF-8'))
 					pin_inputted = True
 

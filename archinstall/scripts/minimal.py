@@ -1,18 +1,13 @@
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, List
 
 import archinstall
-from archinstall import info
-from archinstall import Installer, ConfigurationOutput
+from archinstall import ConfigurationOutput, Installer, debug, info
 from archinstall.default_profiles.minimal import MinimalProfile
-from archinstall.lib.interactions import suggest_single_disk_layout, select_devices
+from archinstall.lib import disk
+from archinstall.lib.interactions import select_devices, suggest_single_disk_layout
 from archinstall.lib.models import Bootloader, User
 from archinstall.lib.profile import ProfileConfiguration, profile_handler
-from archinstall.lib import disk
-
-if TYPE_CHECKING:
-	_: Any
-
+from archinstall.tui import Tui
 
 info("Minimal only supports:")
 info(" * Being installed to a single disk")
@@ -23,7 +18,7 @@ if archinstall.arguments.get('help', None):
 	info(" - Optional systemd network via --network")
 
 
-def perform_installation(mountpoint: Path):
+def perform_installation(mountpoint: Path) -> None:
 	disk_config: disk.DiskLayoutConfiguration = archinstall.arguments['disk_config']
 	disk_encryption: disk.DiskEncryption = archinstall.arguments.get('disk_encryption', None)
 
@@ -58,7 +53,7 @@ def perform_installation(mountpoint: Path):
 	info(" * devel (password: devel)")
 
 
-def prompt_disk_layout():
+def prompt_disk_layout() -> None:
 	fs_type = None
 	if filesystem := archinstall.arguments.get('filesystem', None):
 		fs_type = disk.FilesystemType(filesystem)
@@ -72,14 +67,14 @@ def prompt_disk_layout():
 	)
 
 
-def parse_disk_encryption():
+def parse_disk_encryption() -> None:
 	if enc_password := archinstall.arguments.get('!encryption-password', None):
-		modification: List[disk.DeviceModification] = archinstall.arguments['disk_config']
-		partitions: List[disk.PartitionModification] = []
+		modification: list[disk.DeviceModification] = archinstall.arguments['disk_config']
+		partitions: list[disk.PartitionModification] = []
 
 		# encrypt all partitions except the /boot
 		for mod in modification:
-			partitions += list(filter(lambda x: x.mountpoint != Path('/boot'), mod.partitions))
+			partitions += [p for p in mod.partitions if p.mountpoint != Path('/boot')]
 
 		archinstall.arguments['disk_encryption'] = disk.DiskEncryption(
 			encryption_type=disk.EncryptionType.Luks,
@@ -88,19 +83,31 @@ def parse_disk_encryption():
 		)
 
 
-prompt_disk_layout()
-parse_disk_encryption()
+def minimal() -> None:
+	with Tui():
+		prompt_disk_layout()
+		parse_disk_encryption()
 
-config_output = ConfigurationOutput(archinstall.arguments)
-config_output.show()
+	config = ConfigurationOutput(archinstall.arguments)
+	config.write_debug()
+	config.save()
 
-input(str(_('Press Enter to continue.')))
+	if archinstall.arguments.get('dry_run'):
+		exit(0)
 
-fs_handler = disk.FilesystemHandler(
-	archinstall.arguments['disk_config'],
-	archinstall.arguments.get('disk_encryption', None)
-)
+	if not archinstall.arguments.get('silent'):
+		with Tui():
+			if not config.confirm_config():
+				debug('Installation aborted')
+				minimal()
 
-fs_handler.perform_filesystem_operations()
+	fs_handler = disk.FilesystemHandler(
+		archinstall.arguments['disk_config'],
+		archinstall.arguments.get('disk_encryption', None)
+	)
 
-perform_installation(archinstall.storage.get('MOUNT_POINT', Path('/mnt')))
+	fs_handler.perform_filesystem_operations()
+	perform_installation(archinstall.arguments.get('mount_point', Path('/mnt')))
+
+
+minimal()

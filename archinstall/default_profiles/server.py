@@ -1,17 +1,21 @@
-from typing import Any, TYPE_CHECKING, List
+from typing import TYPE_CHECKING, override
 
+from archinstall.default_profiles.profile import Profile, ProfileType, SelectResult
 from archinstall.lib.output import info
-from archinstall.lib.menu import MenuSelectionType
 from archinstall.lib.profile.profiles_handler import profile_handler
-from archinstall.default_profiles.profile import ProfileType, Profile, SelectResult, TProfile
+from archinstall.tui import FrameProperties, MenuItem, MenuItemGroup, PreviewStyle, ResultType, SelectMenu
 
 if TYPE_CHECKING:
+	from collections.abc import Callable
+
 	from archinstall.lib.installer import Installer
-	_: Any
+	from archinstall.lib.translationhandler import DeferredTranslation
+
+	_: Callable[[str], DeferredTranslation]
 
 
 class ServerProfile(Profile):
-	def __init__(self, current_value: List[TProfile] = []):
+	def __init__(self, current_value: list[Profile] = []):
 		super().__init__(
 			'Server',
 			ProfileType.Server,
@@ -19,35 +23,51 @@ class ServerProfile(Profile):
 			current_selection=current_value
 		)
 
-	def do_on_select(self) -> SelectResult:
-		available_servers = profile_handler.get_server_profiles()
+	@override
+	def do_on_select(self) -> SelectResult | None:
+		items = [
+			MenuItem(
+				p.name,
+				value=p,
+				preview_action=lambda x: x.value.preview_text()
+			) for p in profile_handler.get_server_profiles()
+		]
 
-		choice = profile_handler.select_profile(
-			available_servers,
-			self._current_selection,
-			title=str(_('Choose which servers to install, if none then a minimal installation will be done')),
+		group = MenuItemGroup(items, sort_items=True)
+		group.set_selected_by_value(self.current_selection)
+
+		result = SelectMenu(
+			group,
+			allow_reset=True,
+			allow_skip=True,
+			preview_style=PreviewStyle.RIGHT,
+			preview_size='auto',
+			preview_frame=FrameProperties.max('Info'),
 			multi=True
-		)
+		).run()
 
-		match choice.type_:
-			case MenuSelectionType.Selection:
-				self.set_current_selection(choice.value)  # type: ignore
+		match result.type_:
+			case ResultType.Selection:
+				selections = result.get_values()
+				self.current_selection = selections
 				return SelectResult.NewSelection
-			case MenuSelectionType.Skip:
+			case ResultType.Skip:
 				return SelectResult.SameSelection
-			case MenuSelectionType.Reset:
+			case ResultType.Reset:
 				return SelectResult.ResetCurrent
 
-	def post_install(self, install_session: 'Installer'):
-		for profile in self._current_selection:
+	@override
+	def post_install(self, install_session: 'Installer') -> None:
+		for profile in self.current_selection:
 			profile.post_install(install_session)
 
-	def install(self, install_session: 'Installer'):
+	@override
+	def install(self, install_session: 'Installer') -> None:
 		server_info = self.current_selection_names()
 		details = ', '.join(server_info)
 		info(f'Now installing the selected servers: {details}')
 
-		for server in self._current_selection:
+		for server in self.current_selection:
 			info(f'Installing {server.name}...')
 			install_session.add_additional_packages(server.packages)
 			install_session.enable_service(server.services)

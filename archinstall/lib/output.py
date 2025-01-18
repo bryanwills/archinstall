@@ -2,13 +2,16 @@ import logging
 import os
 import sys
 import unicodedata
-from enum import Enum
-
-from pathlib import Path
-from typing import Dict, Union, List, Any, Callable, Optional
+from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
+from enum import Enum
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from .storage import storage
+
+if TYPE_CHECKING:
+	from _typeshed import DataclassInstance
 
 
 class FormattedOutput:
@@ -16,10 +19,10 @@ class FormattedOutput:
 	@classmethod
 	def _get_values(
 		cls,
-		o: Any,
-		class_formatter: Optional[Union[str, Callable]] = None,
-		filter_list: List[str] = []
-	) -> Dict[str, Any]:
+		o: 'DataclassInstance',
+		class_formatter: str | Callable | None = None,  # type: ignore[type-arg]
+		filter_list: list[str] = []
+	) -> dict[str, Any]:
 		"""
 		the original values returned a dataclass as dict thru the call to some specific methods
 		this version allows thru the parameter class_formatter to call a dynamically selected formatting method.
@@ -48,9 +51,9 @@ class FormattedOutput:
 	@classmethod
 	def as_table(
 		cls,
-		obj: List[Any],
-		class_formatter: Optional[Union[str, Callable]] = None,
-		filter_list: List[str] = [],
+		obj: list[Any],
+		class_formatter: str | Callable | None = None,  # type: ignore[type-arg]
+		filter_list: list[str] = [],
 		capitalize: bool = False
 	) -> str:
 		""" variant of as_table (subtly different code) which has two additional parameters
@@ -64,7 +67,7 @@ class FormattedOutput:
 		raw_data = [cls._get_values(o, class_formatter, filter_list) for o in obj]
 
 		# determine the maximum column size
-		column_width: Dict[str, int] = {}
+		column_width: dict[str, int] = {}
 		for o in raw_data:
 			for k, v in o.items():
 				if not filter_list or k in filter_list:
@@ -97,9 +100,9 @@ class FormattedOutput:
 				value = record.get(key, '')
 
 				if '!' in key:
-					value = '*' * width
+					value = '*' * len(value)
 
-				if isinstance(value, (int, float)) or (isinstance(value, str) and value.isnumeric()):
+				if isinstance(value, int | float) or (isinstance(value, str) and value.isnumeric()):
 					obj_data.append(unicode_rjust(str(value), width))
 				else:
 					obj_data.append(unicode_ljust(str(value), width))
@@ -109,7 +112,7 @@ class FormattedOutput:
 		return output
 
 	@classmethod
-	def as_columns(cls, entries: List[str], cols: int) -> str:
+	def as_columns(cls, entries: list[str], cols: int) -> str:
 		"""
 		Will format a list into a given number of columns
 		"""
@@ -130,7 +133,7 @@ class Journald:
 	@staticmethod
 	def log(message: str, level: int = logging.DEBUG) -> None:
 		try:
-			import systemd.journal  # type: ignore
+			import systemd.journal  # type: ignore[import-not-found]
 		except ModuleNotFoundError:
 			return None
 
@@ -144,7 +147,7 @@ class Journald:
 		log_adapter.log(level, message)
 
 
-def _check_log_permissions():
+def _check_log_permissions() -> None:
 	filename = storage.get('LOG_FILE', None)
 	log_dir = storage.get('LOG_PATH', Path('./'))
 
@@ -199,9 +202,9 @@ class Font(Enum):
 def _stylize_output(
 	text: str,
 	fg: str,
-	bg: Optional[str],
+	bg: str | None,
 	reset: bool,
-	font: List[Font] = [],
+	font: list[Font] = [],
 ) -> str:
 	"""
 	Heavily influenced by:
@@ -212,21 +215,21 @@ def _stylize_output(
 	Adds styling to a text given a set of color arguments.
 	"""
 	colors = {
-		'black' : '0',
-		'red' : '1',
-		'green' : '2',
-		'yellow' : '3',
-		'blue' : '4',
-		'magenta' : '5',
-		'cyan' : '6',
-		'white' : '7',
-		'teal' : '8;5;109',      # Extended 256-bit colors (not always supported)
-		'orange' : '8;5;208',    # https://www.lihaoyi.com/post/BuildyourownCommandLinewithANSIescapecodes.html#256-colors
-		'darkorange' : '8;5;202',
-		'gray' : '8;5;246',
-		'grey' : '8;5;246',
-		'darkgray' : '8;5;240',
-		'lightgray' : '8;5;256'
+		'black': '0',
+		'red': '1',
+		'green': '2',
+		'yellow': '3',
+		'blue': '4',
+		'magenta': '5',
+		'cyan': '6',
+		'white': '7',
+		'teal': '8;5;109',      # Extended 256-bit colors (not always supported)
+		'orange': '8;5;208',    # https://www.lihaoyi.com/post/BuildyourownCommandLinewithANSIescapecodes.html#256-colors
+		'darkorange': '8;5;202',
+		'gray': '8;5;246',
+		'grey': '8;5;246',
+		'darkgray': '8;5;240',
+		'lightgray': '8;5;256'
 	}
 
 	foreground = {key: f'3{colors[key]}' for key in colors}
@@ -234,7 +237,7 @@ def _stylize_output(
 	code_list = []
 
 	if text == '' and reset:
-		return '\x1b[%sm' % '0'
+		return '\x1b[0m'
 
 	code_list.append(foreground[str(fg)])
 
@@ -253,10 +256,10 @@ def info(
 	*msgs: str,
 	level: int = logging.INFO,
 	fg: str = 'white',
-	bg: Optional[str] = None,
+	bg: str | None = None,
 	reset: bool = False,
-	font: List[Font] = []
-):
+	font: list[Font] = []
+) -> None:
 	log(*msgs, level=level, fg=fg, bg=bg, reset=reset, font=font)
 
 
@@ -264,10 +267,10 @@ def debug(
 	*msgs: str,
 	level: int = logging.DEBUG,
 	fg: str = 'white',
-	bg: Optional[str] = None,
+	bg: str | None = None,
 	reset: bool = False,
-	font: List[Font] = []
-):
+	font: list[Font] = []
+) -> None:
 	log(*msgs, level=level, fg=fg, bg=bg, reset=reset, font=font)
 
 
@@ -275,21 +278,21 @@ def error(
 	*msgs: str,
 	level: int = logging.ERROR,
 	fg: str = 'red',
-	bg: Optional[str] = None,
+	bg: str | None = None,
 	reset: bool = False,
-	font: List[Font] = []
-):
+	font: list[Font] = []
+) -> None:
 	log(*msgs, level=level, fg=fg, bg=bg, reset=reset, font=font)
 
 
 def warn(
 	*msgs: str,
-	level: int = logging.WARN,
+	level: int = logging.WARNING,
 	fg: str = 'yellow',
-	bg: Optional[str] = None,
+	bg: str | None = None,
 	reset: bool = False,
-	font: List[Font] = []
-):
+	font: list[Font] = []
+) -> None:
 	log(*msgs, level=level, fg=fg, bg=bg, reset=reset, font=font)
 
 
@@ -297,10 +300,10 @@ def log(
 	*msgs: str,
 	level: int = logging.INFO,
 	fg: str = 'white',
-	bg: Optional[str] = None,
+	bg: str | None = None,
 	reset: bool = False,
-	font: List[Font] = []
-):
+	font: list[Font] = []
+) -> None:
 	# leave this check here as we need to setup the logging
 	# right from the beginning when the modules are loaded
 	_check_log_permissions()
@@ -319,18 +322,15 @@ def log(
 
 	Journald.log(text, level=level)
 
-	from .menu import Menu
-	if not Menu.is_menu_active():
-		# Finally, print the log unless we skipped it based on level.
-		# We use sys.stdout.write()+flush() instead of print() to try and
-		# fix issue #94
-		if level != logging.DEBUG or storage.get('arguments', {}).get('verbose', False):
-			sys.stdout.write(f"{text}\n")
-			sys.stdout.flush()
+	if level != logging.DEBUG or storage.get('arguments', {}).get('verbose', False):
+		from archinstall.tui import Tui
+		Tui.print(text)
+
 
 def _count_wchars(string: str) -> int:
 	"Count the total number of wide characters contained in a string"
 	return sum(unicodedata.east_asian_width(c) in 'FW' for c in string)
+
 
 def unicode_ljust(string: str, width: int, fillbyte: str = ' ') -> str:
 	"""Return a left-justified unicode string of length width.
@@ -344,6 +344,7 @@ def unicode_ljust(string: str, width: int, fillbyte: str = ' ') -> str:
 	'こんにちは*****'
 	"""
 	return string.ljust(width - _count_wchars(string), fillbyte)
+
 
 def unicode_rjust(string: str, width: int, fillbyte: str = ' ') -> str:
 	"""Return a right-justified unicode string of length width.

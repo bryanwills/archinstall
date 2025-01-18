@@ -1,15 +1,16 @@
-from pathlib import Path
-import time
 import re
-from typing import TYPE_CHECKING, Any, List, Callable, Union
+import time
+from collections.abc import Callable
+from pathlib import Path
 from shutil import copy2
+from typing import TYPE_CHECKING, Any
 
-from ..general import SysCommand
-from ..output import warn, error, info
-from .repo import Repo
-from .config import Config
 from ..exceptions import RequirementError
+from ..general import SysCommand
+from ..output import error, info, warn
 from ..plugins import plugins
+from .config import Config
+from .repo import Repo
 
 if TYPE_CHECKING:
 	_: Any
@@ -23,7 +24,7 @@ class Pacman:
 		self.target = target
 
 	@staticmethod
-	def run(args :str, default_cmd :str = 'pacman') -> SysCommand:
+	def run(args: str, default_cmd: str = 'pacman') -> SysCommand:
 		"""
 		A centralized function to call `pacman` from.
 		It also protects us from colliding with other running pacman sessions (if used locally).
@@ -44,7 +45,7 @@ class Pacman:
 
 		return SysCommand(f'{default_cmd} {args}')
 
-	def ask(self, error_message: str, bail_message: str, func: Callable, *args, **kwargs):
+	def ask(self, error_message: str, bail_message: str, func: Callable, *args, **kwargs) -> None:  # type: ignore[type-arg]
 		while True:
 			try:
 				func(*args, **kwargs)
@@ -55,7 +56,7 @@ class Pacman:
 					continue
 				raise RequirementError(f'{bail_message}: {err}')
 
-	def sync(self):
+	def sync(self) -> None:
 		if self.synced:
 			return
 		self.ask(
@@ -63,11 +64,11 @@ class Pacman:
 			'Could not sync mirrors',
 			self.run,
 			'-Syy',
-			default_cmd='/usr/bin/pacman'
+			default_cmd='pacman'
 		)
 		self.synced = True
 
-	def strap(self, packages: Union[str, List[str]]):
+	def strap(self, packages: str | list[str]) -> None:
 		self.sync()
 		if isinstance(packages, str):
 			packages = [packages]
@@ -83,6 +84,6 @@ class Pacman:
 			'Could not strap in packages',
 			'Pacstrap failed. See /var/log/archinstall/install.log or above message for error details',
 			SysCommand,
-			f'/usr/bin/pacstrap -C /etc/pacman.conf -K {self.target} {" ".join(packages)} --noconfirm',
+			f'pacstrap -C /etc/pacman.conf -K {self.target} {" ".join(packages)} --noconfirm',
 			peek_output=True
 		)
